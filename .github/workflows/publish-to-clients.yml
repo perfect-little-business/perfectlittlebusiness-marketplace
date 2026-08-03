@@ -1,0 +1,147 @@
+# Publish to clients
+#
+# WHAT THIS DOES, in plain language:
+#   Clients install the plugin from a DIFFERENT repo than the one you work in.
+#   This repo is where the work happens. `perfectlittlebusiness1-marketplace`
+#   is what clients actually download. Historically those two drifted apart,
+#   and finished work sat unpublished for weeks.
+#
+#   This job copies this repo into the client repo automatically, but ONLY
+#   when the plugin's version number changes. So:
+#
+#     - push work all day  ->  nothing happens, clients see nothing
+#     - bump the version   ->  clients get everything, within a minute
+#
+#   Bumping the version in perfectlittlebusiness/.claude-plugin/plugin.json
+#   IS the act of publishing. That is the only thing you have to remember.
+#
+# THE ONE FIELD THAT MUST NEVER BE COPIED:
+#   The client repo's marketplace name is "plb1", not "plb". That is a
+#   deliberate cache-buster: Claude Cowork caches the marketplace list, and
+#   the distinct name is what forces clients to pull a fresh copy. This job
+#   restores that field after every sync. Do not "fix" it.
+
+name: Publish to clients
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:          # lets you run it by hand from the Actions tab
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the work repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Make sure the publish token exists
+        id: guard
+        env:
+          TOKEN: ${{ secrets.PLB1_SYNC_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::warning::PLB1_SYNC_TOKEN is not set, so nothing was published."
+            echo "::warning::Add it under Settings > Secrets and variables > Actions."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compare versions
+        id: check
+        if: steps.guard.outputs.ok == 'true'
+        env:
+          TOKEN: ${{ secrets.PLB1_SYNC_TOKEN }}
+        run: |
+          set -euo pipefail
+          MINE=$(python3 -c "import json;print(json.load(open('perfectlittlebusiness/.claude-plugin/plugin.json'))['version'])")
+          echo "this repo is at: $MINE"
+
+          git clone --quiet --depth 1 \
+            "https://x-access-token:${TOKEN}@github.com/perfect-little-business/perfectlittlebusiness1-marketplace.git" \
+            /tmp/clients
+          THEIRS=$(python3 -c "import json;print(json.load(open('/tmp/clients/perfectlittlebusiness/.claude-plugin/plugin.json'))['version'])")
+          echo "clients are at: $THEIRS"
+
+          echo "mine=$MINE"   >> "$GITHUB_OUTPUT"
+          echo "theirs=$THEIRS" >> "$GITHUB_OUTPUT"
+          if [ "$MINE" = "$THEIRS" ]; then
+            echo "Versions match, so there is nothing to publish."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Copy this repo into the client repo
+        if: steps.check.outputs.changed == 'true'
+        env:
+          TOKEN: ${{ secrets.PLB1_SYNC_TOKEN }}
+          MINE: ${{ steps.check.outputs.mine }}
+          THEIRS: ${{ steps.check.outputs.theirs }}
+        run: |
+          set -euo pipefail
+          WORK="$PWD"
+
+          # Remember the cache-buster before touching anything.
+          KEEP_NAME=$(python3 -c "import json;print(json.load(open('/tmp/clients/.claude-plugin/marketplace.json'))['name'])")
+          echo "preserving marketplace name: $KEEP_NAME"
+
+          # Replace the client repo's tracked files with this repo's tracked
+          # files. Clearing first means deletions and renames carry across too.
+          #
+          # .github/ is excluded from BOTH sides on purpose. Each repo owns its
+          # own automation: this repo has the publish job, the client repo has
+          # its tarball build. Copying would overwrite theirs; deleting without
+          # copying would silently destroy it.
+          cd /tmp/clients
+          git ls-files -z | grep -zv '^\.github/' | xargs -0 -r rm -f
+          cd "$WORK"
+          git ls-files -z | grep -zv '^\.github/' | xargs -0 -r -I{} cp --parents {} /tmp/clients/
+
+          # Restore the cache-buster.
+          cd /tmp/clients
+          python3 - "$KEEP_NAME" <<'PY'
+          import json, sys
+          p = ".claude-plugin/marketplace.json"
+          d = json.load(open(p))
+          d["name"] = sys.argv[1]
+          open(p, "w").write(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+          PY
+
+          # Refuse to publish if the cache-buster did not survive.
+          FINAL=$(python3 -c "import json;print(json.load(open('.claude-plugin/marketplace.json'))['name'])")
+          if [ "$FINAL" != "$KEEP_NAME" ]; then
+            echo "::error::marketplace name became '$FINAL', expected '$KEEP_NAME'. Refusing to publish."
+            exit 1
+          fi
+
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "Nothing actually changed in the files. Done."
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit \
+            -m "release: publish v${MINE} from the development repo" \
+            -m "Automatic sync. Was v${THEIRS}, now v${MINE}. Source commit: ${GITHUB_SHA}" \
+            -m "The marketplace name stays '${KEEP_NAME}' (Claude Cowork cache-buster) and is the only field that ever differs between the two repos."
+          git push origin main
+          echo "Published v${MINE} to clients."
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ "${{ steps.guard.outputs.ok }}" != "true" ]; then
+            echo "### Not published: PLB1_SYNC_TOKEN missing" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${{ steps.check.outputs.changed }}" = "true" ]; then
+            echo "### Published v${{ steps.check.outputs.mine }} to clients" >> "$GITHUB_STEP_SUMMARY"
+            echo "Clients were on v${{ steps.check.outputs.theirs }}." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Nothing to publish" >> "$GITHUB_STEP_SUMMARY"
+            echo "Both repos are on v${{ steps.check.outputs.mine }}." >> "$GITHUB_STEP_SUMMARY"
+          fi
