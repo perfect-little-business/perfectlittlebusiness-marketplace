@@ -69,7 +69,7 @@ Website Copy and the Directory Dossier stay in HQ. They open there after a short
 
 ### Your AIOS Brain folder
 
-`/setup` builds a whole folder around it: `CLAUDE.md` (the briefing your AI reads every session), `README.md`, `MEMORY.md`, `ops/` (how you work), `loop/insights.md` (an inbox for things worth keeping), `work/`, `archive/`, and a folder for each other business you run. Your plan from HQ comes into `brain/`, alongside who's who (`people.md`) and your ownership and confidentiality lines (`boundaries.md`). Each planning step adds or updates its own file as you run it:
+`/setup` builds a whole folder around it: `CLAUDE.md` (the briefing your AI reads every session), `README.md`, `MEMORY.md`, `ops/` (what your AI can do freely and what waits for your yes), `loop/insights.md` (an inbox for things worth keeping), `clients/` (one confidential folder per client, if you work with clients one to one), `work/`, `archive/`, and a folder for each other business you run. Your plan from HQ comes into `brain/`, alongside who's who (`people.md`) and your ownership and confidentiality lines (`boundaries.md`). Each planning step adds or updates its own file as you run it:
 
 ```
 brain/
